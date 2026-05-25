@@ -313,10 +313,12 @@ ipcMain.handle('app:copy', (_e, text) => {
 
 // ---------- window ----------
 function createWindow() {
+  const iconPath = path.join(__dirname, 'build', 'icon.png');
   const win = new BrowserWindow({
     width: 1280,
     height: 860,
     backgroundColor: '#16181c',
+    icon: fs.existsSync(iconPath) ? iconPath : undefined,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
