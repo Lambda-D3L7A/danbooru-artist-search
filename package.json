@@ -4,11 +4,33 @@
   "description": "Quickly screen Danbooru artists and copy them as Anima prompt tags",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
   },
-  "author": "",
+  "author": "Lambda-D3L7A",
   "license": "MIT",
   "devDependencies": {
-    "electron": "^33.0.0"
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.lambda.danbooru-artist-search",
+    "productName": "Danbooru Artist Search",
+    "artifactName": "${name}-${version}-setup.${ext}",
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
   }
 }
