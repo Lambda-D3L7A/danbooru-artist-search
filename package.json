@@ -1,0 +1,14 @@
+{
+  "name": "danbooru-artist-search",
+  "version": "0.1.0",
+  "description": "Quickly screen Danbooru artists and copy them as Anima prompt tags",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^33.0.0"
+  }
+}

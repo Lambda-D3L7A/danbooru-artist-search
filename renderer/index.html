@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Danbooru 画师筛选</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="toolbar">
+    <div class="tb-group">
+      <select id="source" title="画师来源">
+        <option value="recent">最近更新</option>
+        <option value="search">搜索画师</option>
+        <option value="random">随机发现</option>
+        <option value="theme">按题材 tag</option>
+        <option value="import">导入名单</option>
+      </select>
+      <select id="sort" title="排序">
+        <option value="count">作品数</option>
+        <option value="date">最近新增</option>
+        <option value="name">名称</option>
+      </select>
+      <div class="query-wrap">
+        <input id="query" type="text" placeholder="按名称过滤（可留空）" autocomplete="off" />
+        <div id="suggest" class="suggest hidden"></div>
+      </div>
+      <button id="loadBtn" class="primary">加载</button>
+    </div>
+    <div class="tb-group">
+      <button id="favBtn" title="收藏夹">收藏夹 <span id="favCount" class="badge">0</span></button>
+      <button id="settingsBtn" title="设置 API Key">⚙</button>
+    </div>
+  </header>
+
+  <div id="selectionBar" class="selection-bar hidden">
+    <span>已选 <strong id="selCount">0</strong> 位画师</span>
+    <button id="copyBtn" class="primary">复制为 Anima 格式</button>
+    <button id="favSelBtn">加入收藏夹</button>
+    <button id="clearSelBtn" class="ghost">清空选择</button>
+  </div>
+
+  <div id="listView" class="list-view">
+    <main id="grid" class="grid"></main>
+    <div id="status" class="status"></div>
+  </div>
+
+  <!-- Artist detail view (all works) -->
+  <section id="artistView" class="artist-view hidden">
+    <div class="artist-head">
+      <button id="artistBack" class="ghost">← 返回</button>
+      <h2 id="artistTitle"></h2>
+      <div class="spacer"></div>
+      <button id="artistStar" class="ghost">★ 收藏</button>
+      <button id="artistCopy" class="primary">复制为 Anima</button>
+      <button id="artistOpen" class="ghost">Danbooru ↗</button>
+    </div>
+    <div id="artistPosts" class="posts-grid"></div>
+    <div class="artist-foot">
+      <button id="artistMore" class="primary">加载更多</button>
+      <span id="artistStatus" class="status"></span>
+    </div>
+  </section>
+
+  <!-- Favorites slide-over -->
+  <aside id="favPanel" class="panel hidden">
+    <div class="panel-head">
+      <h2>收藏夹</h2>
+      <button id="favCloseBtn" class="ghost">✕</button>
+    </div>
+    <div class="panel-toolbar">
+      <input id="favSearch" type="text" placeholder="搜索收藏的画师" autocomplete="off" />
+      <button id="copyAllFavBtn" class="primary small">全部复制为 Anima</button>
+    </div>
+    <div id="favList" class="fav-list"></div>
+  </aside>
+
+  <!-- Settings modal -->
+  <div id="settingsModal" class="modal hidden">
+    <div class="modal-box">
+      <h2>Danbooru API Key</h2>
+      <p class="hint">填入可提升速率上限、看到更全内容。留空也能使用（匿名）。注意：用户名是你的 Danbooru <b>登录名</b>（非数字 UID）；API Key 需在个人资料页「Generate API key」生成。</p>
+      <label>用户名 (login)<input id="loginInput" type="text" placeholder="你的 Danbooru 登录名" /></label>
+      <label>API Key<input id="apiKeyInput" type="password" /></label>
+      <div id="keyTestResult" class="key-result"></div>
+      <div class="modal-actions">
+        <button id="testKeyBtn">测试连接</button>
+        <button id="saveSettingsBtn" class="primary">保存</button>
+        <button id="closeSettingsBtn" class="ghost">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Group picker modal -->
+  <div id="groupModal" class="modal hidden">
+    <div class="modal-box">
+      <h2>加入分组</h2>
+      <select id="groupSelect"></select>
+      <label>或新建分组<input id="newGroupInput" type="text" placeholder="分组名" /></label>
+      <div class="modal-actions">
+        <button id="confirmGroupBtn" class="primary">确认</button>
+        <button id="cancelGroupBtn" class="ghost">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Lightbox -->
+  <div id="lightbox" class="lightbox hidden">
+    <img id="lightboxImg" src="" alt="" referrerpolicy="no-referrer" />
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

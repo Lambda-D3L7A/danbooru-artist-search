@@ -1,0 +1,613 @@
+const $ = (id) => document.getElementById(id);
+
+const state = {
+  source: 'recent',
+  sort: 'count',
+  query: '',
+  page: 1,
+  perPage: 20,
+  artists: [],
+  selected: new Set(),
+  favorites: { groups: ['默认'], items: [] },
+  pendingFavNames: [],
+  artist: { name: null, page: 1 },
+  suggest: { items: [], active: -1 },
+  listScroll: 0,
+  favQuery: '',
+};
+
+// ---- format helpers ----
+const displayName = (name) => name.replace(/_/g, ' ');
+const toAnima = (name) => '@' + name.replace(/_/g, ' ').toLowerCase();
+// CDN blocks browser-UA requests; route images through the main-process proxy.
+const proxied = (url) => 'dimg://fetch/?u=' + encodeURIComponent(url);
+
+function setStatus(msg) {
+  $('status').textContent = msg || '';
+}
+
+// ---- load + render grid (infinite scroll) ----
+const cardEls = new Map();
+let loading = false;
+let reachedEnd = false;
+
+async function load() {
+  if (!$('artistView').classList.contains('hidden')) closeArtist();
+  state.artists = [];
+  reachedEnd = false;
+  clearGrid();
+  $('listView').scrollTop = 0;
+  await fetchPage(false);
+}
+
+function clearGrid() {
+  $('grid').innerHTML = '';
+  cardEls.clear();
+}
+
+async function fetchPage(append) {
+  if (loading || (append && reachedEnd)) return;
+  loading = true;
+  const page = append ? state.page + 1 : 1;
+  setStatus(append ? '加载更多…' : '加载中…');
+  try {
+    const artists = await window.api.getArtists({
+      source: state.source,
+      sort: state.sort,
+      query: state.query,
+      page,
+      perPage: state.perPage,
+      sampleCount: 4,
+    });
+    state.page = page;
+    const raw = artists ? artists.length : 0;
+    const fresh = (artists || []).filter((a) => !cardEls.has(a.name));
+    state.artists.push(...fresh);
+    appendCards(fresh);
+    if (raw === 0) reachedEnd = true;
+    else if (state.source !== 'random' && state.source !== 'recent' && raw < state.perPage) reachedEnd = true;
+    setStatus(
+      state.artists.length
+        ? `已加载 ${state.artists.length} 位画师${reachedEnd ? '（已全部）' : ''}`
+        : '没有结果'
+    );
+    setTimeout(checkFill, 60);
+  } catch (e) {
+    setStatus('加载失败：' + e.message);
+  } finally {
+    loading = false;
+  }
+}
+
+function loadMore() {
+  fetchPage(true);
+}
+
+function appendCards(artists) {
+  const grid = $('grid');
+  for (const a of artists) grid.appendChild(renderCard(a));
+  updateSelectionBar();
+}
+
+function refreshStars() {
+  for (const [name, refs] of cardEls) refs.star.classList.toggle('on', isFav(name));
+}
+
+function onScroll() {
+  if (loading || reachedEnd) return;
+  const el = $('listView');
+  if (el.scrollTop + el.clientHeight >= el.scrollHeight - 700) loadMore();
+}
+
+function checkFill() {
+  if (loading || reachedEnd) return;
+  const el = $('listView');
+  if (el.scrollHeight <= el.clientHeight + 100) loadMore();
+}
+
+function renderCard(artist) {
+  const card = document.createElement('div');
+  card.className = 'card' + (state.selected.has(artist.name) ? ' selected' : '');
+
+  const head = document.createElement('div');
+  head.className = 'card-head';
+
+  const check = document.createElement('input');
+  check.type = 'checkbox';
+  check.className = 'card-check';
+  check.checked = state.selected.has(artist.name);
+
+  const name = document.createElement('div');
+  name.className = 'card-name';
+  name.textContent = displayName(artist.name);
+  name.title = '查看 ' + displayName(artist.name) + ' 的全部作品';
+  name.addEventListener('click', (e) => { e.stopPropagation(); openArtist(artist.name); });
+
+  const count = document.createElement('div');
+  count.className = 'card-count';
+  if (artist.postCount != null) count.textContent = artist.postCount;
+  else if (artist.themeCount != null) count.textContent = '×' + artist.themeCount;
+
+  const star = document.createElement('div');
+  star.className = 'card-star' + (isFav(artist.name) ? ' on' : '');
+  star.textContent = '★';
+  star.title = '收藏';
+
+  const link = document.createElement('div');
+  link.className = 'card-link';
+  link.textContent = '↗';
+  link.title = '在 Danbooru 打开';
+
+  head.append(check, name, count, star, link);
+
+  const thumbs = document.createElement('div');
+  thumbs.className = 'thumbs';
+  const samples = artist.samples || [];
+  for (let i = 0; i < 4; i++) {
+    const cell = document.createElement('div');
+    cell.className = 'thumb';
+    const s = samples[i];
+    if (s && s.thumb) {
+      const img = document.createElement('img');
+      img.src = proxied(s.thumb);
+      img.loading = 'lazy';
+      img.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        openLightbox(s.large || s.thumb);
+      });
+      cell.appendChild(img);
+    } else {
+      cell.classList.add('empty');
+    }
+    thumbs.appendChild(cell);
+  }
+
+  // interactions
+  card.addEventListener('click', () => toggleSelect(artist.name));
+  check.addEventListener('click', (e) => { e.stopPropagation(); toggleSelect(artist.name); });
+  star.addEventListener('click', (e) => { e.stopPropagation(); toggleFav(artist.name); star.classList.toggle('on', isFav(artist.name)); });
+  link.addEventListener('click', (e) => {
+    e.stopPropagation();
+    window.api.openExternal(`https://danbooru.donmai.us/posts?tags=${encodeURIComponent(artist.name)}`);
+  });
+
+  card.append(head, thumbs);
+  cardEls.set(artist.name, { card, check, star });
+  return card;
+}
+
+// ---- selection ----
+function toggleSelect(name) {
+  const sel = state.selected;
+  if (sel.has(name)) sel.delete(name);
+  else sel.add(name);
+  const refs = cardEls.get(name);
+  if (refs) {
+    refs.card.classList.toggle('selected', sel.has(name));
+    refs.check.checked = sel.has(name);
+  }
+  updateSelectionBar();
+}
+
+function updateSelectionBar() {
+  const n = state.selected.size;
+  $('selCount').textContent = n;
+  $('selectionBar').classList.toggle('hidden', n === 0);
+}
+
+// ---- copy ----
+async function copyAnima(names) {
+  if (!names.length) return;
+  const text = names.map(toAnima).join(', ');
+  await window.api.copy(text);
+  setStatus(`已复制 ${names.length} 位画师到剪贴板`);
+}
+
+// ---- favorites ----
+function isFav(name) {
+  return state.favorites.items.some((it) => it.name === name);
+}
+function toggleFav(name) {
+  if (isFav(name)) {
+    state.favorites.items = state.favorites.items.filter((it) => it.name !== name);
+    saveFav();
+  } else {
+    openGroupModal([name]);
+  }
+}
+function addToGroup(names, group) {
+  if (!state.favorites.groups.includes(group)) state.favorites.groups.push(group);
+  for (const name of names) {
+    if (!isFav(name)) state.favorites.items.push({ name, group });
+  }
+  saveFav();
+}
+async function saveFav() {
+  await window.api.storeSet('favorites', state.favorites);
+  renderFavCount();
+  renderFavPanel();
+  refreshStars();
+  if (state.artist.name && !$('artistView').classList.contains('hidden')) updateArtistStar();
+}
+function renderFavCount() {
+  $('favCount').textContent = state.favorites.items.length;
+}
+function renderFavPanel() {
+  const list = $('favList');
+  list.innerHTML = '';
+  const q = (state.favQuery || '').trim().toLowerCase();
+  const byGroup = new Map();
+  for (const g of state.favorites.groups) byGroup.set(g, []);
+  for (const it of state.favorites.items) {
+    if (q && !displayName(it.name).toLowerCase().includes(q)) continue;
+    if (!byGroup.has(it.group)) byGroup.set(it.group, []);
+    byGroup.get(it.group).push(it.name);
+  }
+  let shown = 0;
+  for (const [group, names] of byGroup) {
+    if (!names.length) continue;
+    names.sort((a, b) => displayName(a).localeCompare(displayName(b)));
+    shown += names.length;
+    const wrap = document.createElement('div');
+    wrap.className = 'fav-group';
+    const gh = document.createElement('div');
+    gh.className = 'fav-group-head';
+    const title = document.createElement('span');
+    title.textContent = `${group} (${names.length})`;
+    const copyG = document.createElement('button');
+    copyG.className = 'small';
+    copyG.textContent = '复制';
+    copyG.addEventListener('click', () => copyAnima(names));
+    gh.append(title, copyG);
+    wrap.appendChild(gh);
+    for (const name of names) wrap.appendChild(renderFavItem(name));
+    list.appendChild(wrap);
+  }
+  if (!shown) {
+    const empty = document.createElement('div');
+    empty.className = 'status';
+    empty.textContent = q ? '没有匹配的收藏' : '还没有收藏画师';
+    list.appendChild(empty);
+  }
+}
+
+function renderFavItem(name) {
+  const item = document.createElement('div');
+  item.className = 'fav-item';
+
+  const top = document.createElement('div');
+  top.className = 'fav-item-top';
+  const sp = document.createElement('span');
+  sp.className = 'fav-name';
+  sp.textContent = displayName(name);
+  sp.title = '查看 ' + displayName(name) + ' 的全部作品';
+  sp.addEventListener('click', () => {
+    $('favPanel').classList.add('hidden');
+    openArtist(name);
+  });
+  const rm = document.createElement('button');
+  rm.textContent = '✕';
+  rm.addEventListener('click', () => {
+    state.favorites.items = state.favorites.items.filter((it) => it.name !== name);
+    saveFav();
+  });
+  top.append(sp, rm);
+
+  const thumbs = document.createElement('div');
+  thumbs.className = 'fav-thumbs';
+  for (let i = 0; i < 4; i++) {
+    const cell = document.createElement('div');
+    cell.className = 'fav-thumb';
+    thumbs.appendChild(cell);
+  }
+  item.append(top, thumbs);
+  fillFavThumbs(name, thumbs);
+  return item;
+}
+
+const favSampleCache = new Map();
+async function fillFavThumbs(name, container) {
+  let samples = favSampleCache.get(name);
+  if (!samples) {
+    try {
+      samples = await window.api.getArtistPosts({ name, page: 1, limit: 4 });
+    } catch {
+      samples = [];
+    }
+    favSampleCache.set(name, samples);
+  }
+  const cells = container.children;
+  for (let i = 0; i < cells.length; i++) {
+    const s = samples[i];
+    if (s && s.thumb) {
+      const img = document.createElement('img');
+      img.src = proxied(s.thumb);
+      img.loading = 'lazy';
+      img.addEventListener('click', () => openLightbox(s.large || s.thumb));
+      cells[i].innerHTML = '';
+      cells[i].appendChild(img);
+    }
+  }
+}
+
+// ---- group modal ----
+function openGroupModal(names) {
+  state.pendingFavNames = names;
+  const sel = $('groupSelect');
+  sel.innerHTML = '';
+  for (const g of state.favorites.groups) {
+    const opt = document.createElement('option');
+    opt.value = g;
+    opt.textContent = g;
+    sel.appendChild(opt);
+  }
+  $('newGroupInput').value = '';
+  $('groupModal').classList.remove('hidden');
+}
+
+// ---- search autocomplete ----
+let suggestTimer = null;
+function scheduleSuggest() {
+  clearTimeout(suggestTimer);
+  const q = $('query').value.trim();
+  const eligible = state.source === 'search';
+  if (!eligible || q.length < 1) {
+    hideSuggest();
+    return;
+  }
+  suggestTimer = setTimeout(() => fetchSuggest(q), 250);
+}
+
+async function fetchSuggest(q) {
+  try {
+    const items = await window.api.autocomplete(q);
+    if ($('query').value.trim() !== q) return; // stale
+    state.suggest = { items, active: -1 };
+    renderSuggest();
+  } catch {
+    hideSuggest();
+  }
+}
+
+function renderSuggest() {
+  const box = $('suggest');
+  const { items, active } = state.suggest;
+  box.innerHTML = '';
+  if (!items.length) {
+    hideSuggest();
+    return;
+  }
+  items.forEach((it, i) => {
+    const d = document.createElement('div');
+    d.className = 'suggest-item' + (i === active ? ' active' : '');
+    d.textContent = it.label;
+    d.addEventListener('mousedown', (e) => { e.preventDefault(); selectSuggest(it.label); });
+    box.appendChild(d);
+  });
+  box.classList.remove('hidden');
+}
+
+function hideSuggest() {
+  $('suggest').classList.add('hidden');
+  state.suggest.active = -1;
+}
+
+function selectSuggest(label) {
+  $('query').value = label;
+  state.query = label;
+  hideSuggest();
+  state.page = 1;
+  load();
+}
+
+// ---- artist detail view (all works) ----
+async function openArtist(name) {
+  state.listScroll = $('listView').scrollTop;
+  state.artist = { name, page: 1 };
+  $('artistTitle').textContent = displayName(name);
+  $('artistTitle').title = displayName(name);
+  $('artistPosts').innerHTML = '';
+  updateArtistStar();
+  $('listView').classList.add('hidden');
+  $('selectionBar').classList.add('hidden');
+  $('artistView').classList.remove('hidden');
+  $('artistView').scrollTop = 0;
+  await loadArtistPosts();
+}
+
+function closeArtist() {
+  $('artistView').classList.add('hidden');
+  $('listView').classList.remove('hidden');
+  updateSelectionBar();
+  $('listView').scrollTop = state.listScroll || 0;
+}
+
+async function loadArtistPosts() {
+  const s = $('artistStatus');
+  const more = $('artistMore');
+  s.textContent = '加载中…';
+  more.disabled = true;
+  try {
+    const posts = await window.api.getArtistPosts({ name: state.artist.name, page: state.artist.page, limit: 40 });
+    renderArtistPosts(posts);
+    if (!posts.length) {
+      s.textContent = state.artist.page === 1 ? '没有作品' : '没有更多了';
+      more.classList.add('hidden');
+    } else {
+      s.textContent = '';
+      more.classList.remove('hidden');
+    }
+  } catch (e) {
+    s.textContent = '加载失败：' + e.message;
+  } finally {
+    more.disabled = false;
+  }
+}
+
+function renderArtistPosts(posts) {
+  const g = $('artistPosts');
+  for (const p of posts) {
+    const cell = document.createElement('div');
+    cell.className = 'pcell';
+    if (p.thumb) {
+      const img = document.createElement('img');
+      img.src = proxied(p.thumb);
+      img.loading = 'lazy';
+      img.addEventListener('click', () => openLightbox(p.large || p.thumb));
+      cell.appendChild(img);
+    } else {
+      cell.classList.add('empty');
+    }
+    g.appendChild(cell);
+  }
+}
+
+function updateArtistStar() {
+  const btn = $('artistStar');
+  const on = isFav(state.artist.name);
+  btn.classList.toggle('artist-star', true);
+  btn.classList.toggle('on', on);
+  btn.textContent = on ? '★ 已收藏' : '★ 收藏';
+}
+
+// ---- lightbox ----
+function openLightbox(src) {
+  const box = $('lightbox');
+  const img = $('lightboxImg');
+  box.classList.add('loading');
+  img.onload = () => box.classList.remove('loading');
+  img.onerror = () => box.classList.remove('loading');
+  img.src = proxied(src);
+  box.classList.remove('hidden');
+}
+
+// ---- settings ----
+async function loadSettings() {
+  const s = await window.api.storeGet('settings', {});
+  $('loginInput').value = s.login || '';
+  $('apiKeyInput').value = s.apiKey || '';
+}
+
+// ---- wire up ----
+function bind() {
+  $('source').addEventListener('change', (e) => {
+    state.source = e.target.value;
+    $('sort').disabled = state.source !== 'search';
+    const q = $('query');
+    if (state.source === 'search') q.placeholder = '输入画师名搜索';
+    else if (state.source === 'theme') q.placeholder = '题材/角色 tag，例：1girl';
+    else if (state.source === 'import') q.placeholder = '粘贴画师名，逗号或换行分隔';
+    else if (state.source === 'random') q.placeholder = '（随机模式无需输入）';
+    else q.placeholder = '（最近更新，无需输入）';
+    hideSuggest();
+  });
+  $('sort').addEventListener('change', (e) => { state.sort = e.target.value; });
+  $('query').addEventListener('input', (e) => { state.query = e.target.value; scheduleSuggest(); });
+  $('query').addEventListener('focus', () => { if (state.suggest.items.length) renderSuggest(); });
+  $('query').addEventListener('blur', () => setTimeout(hideSuggest, 150));
+  $('query').addEventListener('keydown', (e) => {
+    const open = !$('suggest').classList.contains('hidden');
+    const items = state.suggest.items;
+    if (open && items.length) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        state.suggest.active = (state.suggest.active + 1) % items.length;
+        renderSuggest();
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        state.suggest.active = (state.suggest.active - 1 + items.length) % items.length;
+        renderSuggest();
+        return;
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const a = state.suggest.active;
+        selectSuggest(a >= 0 ? items[a].label : $('query').value);
+        return;
+      }
+      if (e.key === 'Escape') {
+        hideSuggest();
+        return;
+      }
+    }
+    if (e.key === 'Enter') { state.page = 1; load(); }
+  });
+  $('loadBtn').addEventListener('click', () => { state.page = 1; load(); });
+
+  $('listView').addEventListener('scroll', onScroll);
+
+  $('copyBtn').addEventListener('click', () => copyAnima([...state.selected]));
+  $('favSelBtn').addEventListener('click', () => { if (state.selected.size) openGroupModal([...state.selected]); });
+  $('clearSelBtn').addEventListener('click', () => {
+    state.selected.clear();
+    for (const refs of cardEls.values()) { refs.card.classList.remove('selected'); refs.check.checked = false; }
+    updateSelectionBar();
+  });
+
+  $('favBtn').addEventListener('click', () => { renderFavPanel(); $('favPanel').classList.remove('hidden'); });
+  $('favCloseBtn').addEventListener('click', () => $('favPanel').classList.add('hidden'));
+  $('copyAllFavBtn').addEventListener('click', () => copyAnima(state.favorites.items.map((it) => it.name)));
+  $('favSearch').addEventListener('input', (e) => { state.favQuery = e.target.value; renderFavPanel(); });
+
+  $('settingsBtn').addEventListener('click', () => {
+    $('keyTestResult').textContent = '';
+    $('keyTestResult').className = 'key-result';
+    $('settingsModal').classList.remove('hidden');
+  });
+  $('closeSettingsBtn').addEventListener('click', () => $('settingsModal').classList.add('hidden'));
+  $('testKeyBtn').addEventListener('click', async () => {
+    const r = $('keyTestResult');
+    r.className = 'key-result';
+    r.textContent = '测试中…';
+    const res = await window.api.testAuth({
+      login: $('loginInput').value.trim(),
+      apiKey: $('apiKeyInput').value.trim(),
+    });
+    if (res.resolvedLogin) $('loginInput').value = res.resolvedLogin; // UID -> username
+    if (res.ok) {
+      r.className = 'key-result ok';
+      r.textContent = `✓ 连接成功：${res.name}（${res.level}）${res.note || ''}`;
+    } else {
+      r.className = 'key-result err';
+      r.textContent = `✗ ${res.error}`;
+    }
+  });
+  $('saveSettingsBtn').addEventListener('click', async () => {
+    await window.api.storeSet('settings', { login: $('loginInput').value.trim(), apiKey: $('apiKeyInput').value.trim() });
+    $('settingsModal').classList.add('hidden');
+    setStatus('已保存 API 设置');
+  });
+
+  $('confirmGroupBtn').addEventListener('click', () => {
+    const newG = $('newGroupInput').value.trim();
+    const group = newG || $('groupSelect').value || '默认';
+    addToGroup(state.pendingFavNames, group);
+    $('groupModal').classList.add('hidden');
+  });
+  $('cancelGroupBtn').addEventListener('click', () => $('groupModal').classList.add('hidden'));
+
+  $('lightbox').addEventListener('click', () => $('lightbox').classList.add('hidden'));
+
+  $('artistBack').addEventListener('click', closeArtist);
+  $('artistMore').addEventListener('click', () => { state.artist.page++; loadArtistPosts(); });
+  $('artistCopy').addEventListener('click', () => copyAnima([state.artist.name]));
+  $('artistStar').addEventListener('click', () => { toggleFav(state.artist.name); updateArtistStar(); });
+  $('artistOpen').addEventListener('click', () =>
+    window.api.openExternal(`https://danbooru.donmai.us/posts?tags=${encodeURIComponent(state.artist.name)}`));
+}
+
+async function init() {
+  bind();
+  $('sort').disabled = state.source !== 'search';
+  $('query').placeholder = '（最近更新，无需输入）';
+  state.favorites = await window.api.storeGet('favorites', { groups: ['默认'], items: [] });
+  if (!state.favorites.groups) state.favorites.groups = ['默认'];
+  if (!state.favorites.items) state.favorites.items = [];
+  renderFavCount();
+  await loadSettings();
+  load();
+}
+
+init();
