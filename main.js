@@ -212,14 +212,19 @@ function listImported({ query, page, perPage }) {
   return names.slice(start, start + perPage).map((name) => ({ name }));
 }
 
-async function getAutocomplete(q) {
+async function getAutocomplete(q, type) {
   if (!q || !q.trim()) return [];
   const data = await dGet('/autocomplete.json', {
     'search[query]': q.trim(),
-    'search[type]': 'artist',
+    'search[type]': type || 'artist',
     limit: '10',
   });
-  return data.map((d) => ({ name: d.value, label: d.label }));
+  return data.map((d) => ({
+    name: d.value,
+    label: d.label,
+    category: d.category,
+    postCount: d.post_count,
+  }));
 }
 
 async function getArtistPosts({ name, page, limit }) {
@@ -312,7 +317,7 @@ async function testAuth(creds) {
 // ---------- IPC ----------
 ipcMain.handle('danbooru:getArtists', (_e, opts) => getArtists(opts));
 ipcMain.handle('danbooru:getArtistPosts', (_e, opts) => getArtistPosts(opts));
-ipcMain.handle('danbooru:autocomplete', (_e, q) => getAutocomplete(q));
+ipcMain.handle('danbooru:autocomplete', (_e, q, type) => getAutocomplete(q, type));
 ipcMain.handle('danbooru:testAuth', (_e, creds) => testAuth(creds));
 ipcMain.handle('store:get', (_e, key, fallback) => readJson(`${key}.json`, fallback));
 ipcMain.handle('store:set', (_e, key, value) => {

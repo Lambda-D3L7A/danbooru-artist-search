@@ -32,8 +32,14 @@ jobs:
           name: windows-installer
           path: dist/*.exe
 
+      - name: Extract release notes
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: awk '/^## \[/{c++} c==1' CHANGELOG.md > release-body.md
+
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*.exe
+          body_path: release-body.md

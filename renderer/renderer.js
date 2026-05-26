@@ -351,7 +351,7 @@ let suggestTimer = null;
 function scheduleSuggest() {
   clearTimeout(suggestTimer);
   const q = $('query').value.trim();
-  const eligible = state.source === 'search';
+  const eligible = state.source === 'search' || state.source === 'theme';
   if (!eligible || q.length < 1) {
     hideSuggest();
     return;
@@ -361,7 +361,8 @@ function scheduleSuggest() {
 
 async function fetchSuggest(q) {
   try {
-    const items = await window.api.autocomplete(q);
+    const type = state.source === 'theme' ? 'tag_query' : 'artist';
+    const items = await window.api.autocomplete(q, type);
     if ($('query').value.trim() !== q) return; // stale
     state.suggest = { items, active: -1 };
     renderSuggest();
@@ -369,6 +370,8 @@ async function fetchSuggest(q) {
     hideSuggest();
   }
 }
+
+const TAG_CAT = { 0: 'gen', 1: 'artist', 3: 'copy', 4: 'char', 5: 'meta' };
 
 function renderSuggest() {
   const box = $('suggest');
@@ -381,7 +384,19 @@ function renderSuggest() {
   items.forEach((it, i) => {
     const d = document.createElement('div');
     d.className = 'suggest-item' + (i === active ? ' active' : '');
-    d.textContent = it.label;
+    const left = document.createElement('span');
+    left.className = 'suggest-label';
+    left.textContent = it.label;
+    d.appendChild(left);
+    const metaParts = [];
+    if (it.category != null && TAG_CAT[it.category]) metaParts.push(TAG_CAT[it.category]);
+    if (it.postCount != null) metaParts.push(it.postCount.toLocaleString());
+    if (metaParts.length) {
+      const right = document.createElement('span');
+      right.className = 'suggest-meta cat-' + (TAG_CAT[it.category] || 'x');
+      right.textContent = metaParts.join(' · ');
+      d.appendChild(right);
+    }
     d.addEventListener('mousedown', (e) => { e.preventDefault(); selectSuggest(it.label); });
     box.appendChild(d);
   });

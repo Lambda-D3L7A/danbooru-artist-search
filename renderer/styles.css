@@ -70,12 +70,30 @@ input[type="text"] { min-width: 220px; }
 .suggest-item {
   padding: 7px 10px;
   cursor: pointer;
-  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.suggest-label {
+  flex: 1; min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
+.suggest-meta {
+  flex: none;
+  font-size: 11px;
+  color: var(--muted);
+}
+.suggest-meta.cat-artist { color: var(--accent); }
+.suggest-meta.cat-char   { color: #e879a8; }
+.suggest-meta.cat-copy   { color: #b380ff; }
+.suggest-meta.cat-meta   { color: #9aa3af; }
 .suggest-item:hover,
 .suggest-item.active { background: var(--accent); color: #fff; }
+.suggest-item:hover .suggest-meta,
+.suggest-item.active .suggest-meta { color: rgba(255,255,255,0.85); }
 
 .toolbar {
   display: flex;
