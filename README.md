@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="build/logo-source.png" alt="Danbooru Artist Search" width="280" />
+</p>
+
 # Danbooru 画师筛选
 
 [English](README.en.md) · 中文
