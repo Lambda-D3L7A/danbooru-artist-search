@@ -106,7 +106,21 @@
 
   <!-- Lightbox -->
   <div id="lightbox" class="lightbox hidden">
-    <img id="lightboxImg" src="" alt="" referrerpolicy="no-referrer" />
+    <div class="lightbox-image-area">
+      <img id="lightboxImg" src="" alt="" referrerpolicy="no-referrer" />
+    </div>
+    <aside id="lightboxTags" class="lightbox-tags hidden">
+      <div class="lt-head">
+        <span id="ltRating" class="lt-rating"></span>
+        <div class="spacer"></div>
+        <a id="ltPost" class="lt-link" href="#">Danbooru ↗</a>
+      </div>
+      <div id="ltSections" class="lt-sections"></div>
+      <div class="lt-foot">
+        <button id="ltCopyAll" class="primary small">复制为 Anima 提示词</button>
+        <button id="ltCopyAllPlain" class="small">复制全部（原样）</button>
+      </div>
+    </aside>
   </div>
 
   <script src="renderer.js"></script>

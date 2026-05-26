@@ -14,6 +14,7 @@ const state = {
   suggest: { items: [], active: -1 },
   listScroll: 0,
   favQuery: '',
+  lightboxSample: null,
 };
 
 // ---- format helpers ----
@@ -153,7 +154,7 @@ function renderCard(artist) {
       img.loading = 'lazy';
       img.addEventListener('click', (ev) => {
         ev.stopPropagation();
-        openLightbox(s.large || s.thumb);
+        openLightbox(s);
       });
       cell.appendChild(img);
     } else {
@@ -323,7 +324,7 @@ async function fillFavThumbs(name, container) {
       const img = document.createElement('img');
       img.src = proxied(s.thumb);
       img.loading = 'lazy';
-      img.addEventListener('click', () => openLightbox(s.large || s.thumb));
+      img.addEventListener('click', () => openLightbox(s));
       cells[i].innerHTML = '';
       cells[i].appendChild(img);
     }
@@ -453,7 +454,7 @@ function renderArtistPosts(posts) {
       const img = document.createElement('img');
       img.src = proxied(p.thumb);
       img.loading = 'lazy';
-      img.addEventListener('click', () => openLightbox(p.large || p.thumb));
+      img.addEventListener('click', () => openLightbox(p));
       cell.appendChild(img);
     } else {
       cell.classList.add('empty');
@@ -471,14 +472,98 @@ function updateArtistStar() {
 }
 
 // ---- lightbox ----
-function openLightbox(src) {
+function openLightbox(sample) {
+  const isObj = sample && typeof sample === 'object';
+  const src = isObj ? (sample.large || sample.thumb) : sample;
+  state.lightboxSample = isObj ? sample : null;
   const box = $('lightbox');
   const img = $('lightboxImg');
   box.classList.add('loading');
   img.onload = () => box.classList.remove('loading');
   img.onerror = () => box.classList.remove('loading');
   img.src = proxied(src);
+  if (isObj && hasAnyTags(sample)) {
+    renderLightboxTags(sample);
+    $('lightboxTags').classList.remove('hidden');
+  } else {
+    $('lightboxTags').classList.add('hidden');
+  }
   box.classList.remove('hidden');
+}
+
+function hasAnyTags(s) {
+  return ['tagsGeneral', 'tagsCharacter', 'tagsCopyright', 'tagsArtist', 'tagsMeta']
+    .some((k) => s[k] && s[k].length);
+}
+
+function ratingLabel(r) {
+  return ({ s: 'safe', g: 'general', q: 'questionable', e: 'explicit', sensitive: 'sensitive' })[r] || r || '';
+}
+
+function renderLightboxTags(s) {
+  $('ltRating').textContent = s.rating ? 'rating: ' + ratingLabel(s.rating) : '';
+  const link = $('ltPost');
+  if (s.pageUrl) {
+    link.style.display = '';
+    link.dataset.url = s.pageUrl;
+  } else {
+    link.style.display = 'none';
+  }
+  const sections = $('ltSections');
+  sections.innerHTML = '';
+  const groups = [
+    { key: 'tagsCharacter', label: 'character' },
+    { key: 'tagsCopyright', label: 'copyright' },
+    { key: 'tagsArtist', label: 'artist', isArtist: true },
+    { key: 'tagsGeneral', label: 'general' },
+    { key: 'tagsMeta', label: 'meta' },
+  ];
+  for (const g of groups) {
+    const tags = s[g.key] || [];
+    if (!tags.length) continue;
+    const sec = document.createElement('div');
+    sec.className = 'lt-section';
+    const head = document.createElement('div');
+    head.className = 'lt-section-head';
+    head.textContent = `${g.label} · ${tags.length}`;
+    sec.appendChild(head);
+    for (const t of tags) {
+      const chip = document.createElement('span');
+      chip.className = 'lt-chip' + (g.isArtist ? ' artist' : '');
+      const display = displayName(t);
+      chip.textContent = g.isArtist ? '@' + display : display;
+      chip.title = '点击复制';
+      chip.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const text = g.isArtist ? toAnima(t) : displayName(t).toLowerCase();
+        window.api.copy(text);
+        setStatus('已复制：' + text);
+      });
+      sec.appendChild(chip);
+    }
+    sections.appendChild(sec);
+  }
+}
+
+function buildAnima(s) {
+  const f = (t) => displayName(t).toLowerCase();
+  const parts = [];
+  for (const t of s.tagsCharacter || []) parts.push(f(t));
+  for (const t of s.tagsCopyright || []) parts.push(f(t));
+  for (const t of s.tagsArtist || []) parts.push(toAnima(t));
+  for (const t of s.tagsGeneral || []) parts.push(f(t));
+  for (const t of s.tagsMeta || []) parts.push(f(t));
+  return parts.join(', ');
+}
+
+function buildPlain(s) {
+  return [
+    ...(s.tagsCharacter || []),
+    ...(s.tagsCopyright || []),
+    ...(s.tagsArtist || []),
+    ...(s.tagsGeneral || []),
+    ...(s.tagsMeta || []),
+  ].join(' ');
 }
 
 // ---- settings ----
@@ -588,7 +673,28 @@ function bind() {
   });
   $('cancelGroupBtn').addEventListener('click', () => $('groupModal').classList.add('hidden'));
 
-  $('lightbox').addEventListener('click', () => $('lightbox').classList.add('hidden'));
+  $('lightbox').addEventListener('click', (e) => {
+    if (e.target.closest('.lightbox-tags')) return; // ignore clicks inside tags panel
+    $('lightbox').classList.add('hidden');
+  });
+  $('ltCopyAll').addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!state.lightboxSample) return;
+    window.api.copy(buildAnima(state.lightboxSample));
+    setStatus('已复制 Anima 提示词');
+  });
+  $('ltCopyAllPlain').addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!state.lightboxSample) return;
+    window.api.copy(buildPlain(state.lightboxSample));
+    setStatus('已复制全部标签（原样）');
+  });
+  $('ltPost').addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const u = e.currentTarget.dataset.url;
+    if (u) window.api.openExternal(u);
+  });
 
   $('artistBack').addEventListener('click', closeArtist);
   $('artistMore').addEventListener('click', () => { state.artist.page++; loadArtistPosts(); });

@@ -95,6 +95,18 @@ async function pool(items, limit, worker) {
   return out;
 }
 
+function postTags(post) {
+  const f = (s) => (s || '').split(' ').filter(Boolean);
+  return {
+    rating: post.rating,
+    tagsGeneral: f(post.tag_string_general),
+    tagsCharacter: f(post.tag_string_character),
+    tagsCopyright: f(post.tag_string_copyright),
+    tagsArtist: f(post.tag_string_artist),
+    tagsMeta: f(post.tag_string_meta),
+  };
+}
+
 function pickThumb(post) {
   if (post.preview_file_url) return { thumb: post.preview_file_url };
   const variants = post.media_asset && post.media_asset.variants;
@@ -122,6 +134,7 @@ async function fetchSamples(artistName, count) {
       postId: post.id,
       pageUrl: `${BASE}/posts/${post.id}`,
       score: post.score,
+      ...postTags(post),
     });
     if (samples.length >= count) break;
   }
@@ -223,6 +236,7 @@ async function getArtistPosts({ name, page, limit }) {
       postId: post.id,
       pageUrl: `${BASE}/posts/${post.id}`,
       score: post.score,
+      ...postTags(post),
     };
   });
 }

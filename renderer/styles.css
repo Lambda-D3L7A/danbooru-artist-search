@@ -293,18 +293,64 @@ input[type="text"] { min-width: 220px; }
 .lightbox {
   position: fixed; inset: 0;
   background: rgba(0,0,0,0.85);
-  display: flex; align-items: center; justify-content: center;
+  display: flex; align-items: stretch;
   z-index: 80;
-  cursor: zoom-out;
 }
-.lightbox img { max-width: 92%; max-height: 92%; border-radius: 6px; }
-.lightbox.loading img { opacity: 0; }
-.lightbox.loading::after {
+.lightbox-image-area {
+  flex: 1;
+  display: flex; align-items: center; justify-content: center;
+  cursor: zoom-out;
+  overflow: hidden;
+  padding: 16px;
+  position: relative;
+}
+.lightbox-image-area img { max-width: 100%; max-height: 100%; border-radius: 6px; display: block; }
+.lightbox.loading .lightbox-image-area img { opacity: 0; }
+.lightbox.loading .lightbox-image-area::after {
   content: "加载中…";
   position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
   color: #ccc;
   font-size: 14px;
 }
+.lightbox-tags {
+  width: 340px;
+  background: var(--bg2);
+  border-left: 1px solid var(--line);
+  display: flex; flex-direction: column;
+  cursor: default;
+  flex: none;
+}
+.lt-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px; border-bottom: 1px solid var(--line);
+}
+.lt-head .spacer { flex: 1; }
+.lt-rating { color: var(--muted); font-size: 12px; }
+.lt-link { color: var(--accent); font-size: 12px; text-decoration: none; }
+.lt-link:hover { text-decoration: underline; }
+.lt-sections { flex: 1; overflow-y: auto; padding: 8px 14px; }
+.lt-section { margin-bottom: 12px; }
+.lt-section-head {
+  color: var(--muted); font-size: 11px; text-transform: uppercase;
+  margin-bottom: 6px; letter-spacing: 0.4px;
+}
+.lt-chip {
+  display: inline-block;
+  background: var(--bg3); border: 1px solid var(--line);
+  border-radius: 999px; padding: 3px 9px;
+  margin: 0 4px 4px 0; font-size: 12px; cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.lt-chip:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+.lt-chip.artist { color: var(--accent); font-weight: 500; }
+.lt-chip.artist:hover { color: #fff; }
+.lt-foot {
+  padding: 10px 14px; border-top: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: 6px;
+}
+.lt-foot button { width: 100%; }
 
 /* transitions */
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
