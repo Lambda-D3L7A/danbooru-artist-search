@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, clipboard, protocol } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, clipboard, protocol, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -185,22 +185,28 @@ async function listRecentArtists({ page }) {
   return order.map((name) => ({ name }));
 }
 
-async function listArtistsByTheme({ query, page, perPage }) {
+function mapPostToSample(post) {
+  const t = pickThumb(post);
+  return {
+    thumb: t ? t.thumb : null,
+    large: post.large_file_url || post.file_url || (t && t.thumb) || null,
+    fileUrl: post.file_url,
+    fileExt: post.file_ext,
+    postId: post.id,
+    pageUrl: `${BASE}/posts/${post.id}`,
+    score: post.score,
+    ...postTags(post),
+  };
+}
+
+async function listThemePosts({ query, page, perPage }) {
   if (!query || !query.trim()) return [];
   const posts = await dGet('/posts.json', {
     tags: query.trim().replace(/\s+/g, '_'),
-    limit: '200',
+    limit: String(perPage || 40),
+    page: String(page || 1),
   });
-  const counts = new Map();
-  for (const p of posts) {
-    const artists = (p.tag_string_artist || '').split(' ').filter(Boolean);
-    for (const a of artists) counts.set(a, (counts.get(a) || 0) + 1);
-  }
-  const sorted = [...counts.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .map(([name, themeCount]) => ({ name, themeCount }));
-  const start = (page - 1) * perPage;
-  return sorted.slice(start, start + perPage);
+  return posts.map(mapPostToSample);
 }
 
 function listImported({ query, page, perPage }) {
@@ -233,17 +239,7 @@ async function getArtistPosts({ name, page, limit }) {
     limit: String(limit || 40),
     page: String(page || 1),
   });
-  return data.map((post) => {
-    const t = pickThumb(post);
-    return {
-      thumb: t ? t.thumb : null,
-      large: post.large_file_url || post.file_url || (t && t.thumb) || null,
-      postId: post.id,
-      pageUrl: `${BASE}/posts/${post.id}`,
-      score: post.score,
-      ...postTags(post),
-    };
-  });
+  return data.map(mapPostToSample);
 }
 
 async function getArtists(opts) {
@@ -259,7 +255,7 @@ async function getArtists(opts) {
       base = await listRandomArtistTags({ perPage });
       break;
     case 'theme':
-      base = await listArtistsByTheme({ query: opts.query, page, perPage });
+      base = await listThemePosts({ query: opts.query, page, perPage });
       break;
     case 'import':
       base = listImported({ query: opts.query, page, perPage });
@@ -269,11 +265,144 @@ async function getArtists(opts) {
       base = await listArtistTags({ sort: opts.sort, query: opts.query, page, perPage });
       break;
   }
+  // theme returns posts directly; other sources are artist lists needing sample fetches
+  if (opts.source === 'theme') return base;
   const withSamples = await pool(base, 5, async (artist) => {
     const samples = await fetchSamples(artist.name, sampleCount);
     return { ...artist, samples };
   });
   return withSamples;
+}
+
+// ---------- download all artist works ----------
+const downloadTokens = new Map(); // artist name -> { cancelled }
+
+function sanitizeFsName(n) {
+  return (n || '').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim().slice(0, 100) || 'artist';
+}
+
+function buildAnimaCaption(tags) {
+  const f = (t) => t.replace(/_/g, ' ').toLowerCase();
+  const parts = [];
+  for (const t of tags.tagsCharacter || []) parts.push(f(t));
+  for (const t of tags.tagsCopyright || []) parts.push(f(t));
+  for (const t of tags.tagsArtist || []) parts.push('@' + f(t));
+  for (const t of tags.tagsGeneral || []) parts.push(f(t));
+  for (const t of tags.tagsMeta || []) parts.push(f(t));
+  return parts.join(', ');
+}
+
+async function downloadArtistAll({ name, parentDir, mode }, sender) {
+  if (!name || !parentDir) return { ok: false, error: 'missing name or dir' };
+  const isDataset = mode === 'dataset';
+  const subdir = isDataset ? sanitizeFsName(name) + '_dataset' : sanitizeFsName(name);
+  const dir = path.join(parentDir, subdir);
+  fs.mkdirSync(dir, { recursive: true });
+  const token = { cancelled: false };
+  downloadTokens.set(name, token);
+
+  const emit = (p) => { try { sender.send('download:progress', { name, ...p }); } catch {} };
+
+  // 1) enumerate all posts for this artist
+  emit({ status: 'enumerating', current: 0, total: 0, mode });
+  const all = [];
+  let page = 1;
+  while (!token.cancelled) {
+    let posts;
+    try {
+      posts = await dGet('/posts.json', { tags: name, limit: '200', page: String(page) });
+    } catch (e) {
+      emit({ status: 'error', error: String(e.message || e), mode });
+      downloadTokens.delete(name);
+      return { ok: false, error: String(e.message || e) };
+    }
+    if (!posts.length) break;
+    for (const p of posts) {
+      if (p.file_url && p.id && p.file_ext) {
+        all.push({
+          id: p.id,
+          ext: p.file_ext,
+          url: p.file_url,
+          tags: isDataset ? postTags(p) : null,
+        });
+      }
+    }
+    emit({ status: 'enumerating', current: 0, total: all.length, mode });
+    if (posts.length < 200) break;
+    page++;
+  }
+  if (token.cancelled) {
+    downloadTokens.delete(name);
+    emit({ status: 'cancelled', current: 0, total: all.length, mode });
+    return { ok: false, cancelled: true };
+  }
+
+  const total = all.length;
+  emit({ status: 'downloading', current: 0, total, errors: 0, skipped: 0, mode });
+  let done = 0, errors = 0, skipped = 0;
+
+  await pool(all, 4, async (p) => {
+    if (token.cancelled) return;
+    const filePath = path.join(dir, `${p.id}.${p.ext}`);
+    if (fs.existsSync(filePath)) {
+      skipped++;
+      done++;
+    } else {
+      try {
+        const res = await fetch(p.url, { headers: { 'User-Agent': userAgent() } });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const buf = Buffer.from(await res.arrayBuffer());
+        fs.writeFileSync(filePath, buf);
+        done++;
+      } catch (e) {
+        errors++;
+        done++;
+      }
+    }
+    if (isDataset && p.tags) {
+      const captionPath = path.join(dir, `${p.id}.txt`);
+      if (!fs.existsSync(captionPath)) {
+        try { fs.writeFileSync(captionPath, buildAnimaCaption(p.tags), 'utf8'); } catch {}
+      }
+    }
+    emit({ status: 'downloading', current: done, total, errors, skipped, mode });
+  });
+
+  downloadTokens.delete(name);
+  const finalStatus = token.cancelled ? 'cancelled' : 'done';
+  emit({ status: finalStatus, current: done, total, errors, skipped, dir, mode });
+  return { ok: true, dir, done, total, errors, skipped, cancelled: token.cancelled };
+}
+
+function cancelDownload(name) {
+  const t = downloadTokens.get(name);
+  if (t) t.cancelled = true;
+}
+
+async function downloadSinglePost({ url, suggestedName }) {
+  if (!url) return { ok: false, error: 'no url' };
+  const r = await dialog.showSaveDialog({
+    title: '保存图片',
+    defaultPath: suggestedName || 'image.jpg',
+  });
+  if (r.canceled || !r.filePath) return { ok: false, cancelled: true };
+  try {
+    const res = await fetch(url, { headers: { 'User-Agent': userAgent() } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    fs.writeFileSync(r.filePath, buf);
+    return { ok: true, filePath: r.filePath };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+}
+
+async function pickFolder() {
+  const r = await dialog.showOpenDialog({
+    title: '选择保存目录',
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  return r.canceled ? null : r.filePaths[0];
 }
 
 async function testAuth(creds) {
@@ -319,6 +448,10 @@ ipcMain.handle('danbooru:getArtists', (_e, opts) => getArtists(opts));
 ipcMain.handle('danbooru:getArtistPosts', (_e, opts) => getArtistPosts(opts));
 ipcMain.handle('danbooru:autocomplete', (_e, q, type) => getAutocomplete(q, type));
 ipcMain.handle('danbooru:testAuth', (_e, creds) => testAuth(creds));
+ipcMain.handle('download:start', (e, opts) => downloadArtistAll(opts, e.sender));
+ipcMain.handle('download:cancel', (_e, name) => cancelDownload(name));
+ipcMain.handle('download:single', (_e, opts) => downloadSinglePost(opts));
+ipcMain.handle('dialog:pickFolder', () => pickFolder());
 ipcMain.handle('store:get', (_e, key, fallback) => readJson(`${key}.json`, fallback));
 ipcMain.handle('store:set', (_e, key, value) => {
   writeJson(`${key}.json`, value);

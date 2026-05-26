@@ -42,6 +42,7 @@
 
   <div id="listView" class="list-view">
     <main id="grid" class="grid"></main>
+    <div id="postsGrid" class="posts-grid list-posts hidden"></div>
     <div id="status" class="status"></div>
   </div>
 
@@ -53,6 +54,10 @@
       <div class="spacer"></div>
       <button id="artistStar" class="ghost">★ 收藏</button>
       <button id="artistCopy" class="primary">复制为 Anima</button>
+      <button id="artistDownload" class="ghost" title="下载全部作品到本地">⬇ 下载全部</button>
+      <button id="artistDataset" class="ghost" title="下载全部作品并为每张生成 Anima 提示词 .txt（用于 LoRA 等训练）">📦 一键数据集</button>
+      <span id="artistDownloadStatus" class="dl-status hidden"></span>
+      <button id="artistDownloadCancel" class="ghost hidden">取消</button>
       <button id="artistOpen" class="ghost">Danbooru ↗</button>
     </div>
     <div id="artistPosts" class="posts-grid"></div>
@@ -113,12 +118,13 @@
       <div class="lt-head">
         <span id="ltRating" class="lt-rating"></span>
         <div class="spacer"></div>
+        <button id="ltDownload" class="ghost small" title="下载到本地">⬇ 下载</button>
         <a id="ltPost" class="lt-link" href="#">Danbooru ↗</a>
       </div>
       <div id="ltSections" class="lt-sections"></div>
       <div class="lt-foot">
         <button id="ltCopyAll" class="primary small">复制为 Anima 提示词</button>
-        <button id="ltCopyAllPlain" class="small">复制全部（原样）</button>
+        <button id="ltCopyAllPlain" class="small">复制全部提示词</button>
       </div>
     </aside>
   </div>

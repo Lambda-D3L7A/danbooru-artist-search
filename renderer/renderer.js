@@ -7,6 +7,7 @@ const state = {
   page: 1,
   perPage: 20,
   artists: [],
+  posts: [],
   selected: new Set(),
   favorites: { groups: ['默认'], items: [] },
   pendingFavNames: [],
@@ -27,51 +28,93 @@ function setStatus(msg) {
   $('status').textContent = msg || '';
 }
 
+let toastTimer = null;
+function showToast(text, kind) {
+  let el = document.getElementById('toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'toast';
+    document.body.appendChild(el);
+  }
+  el.className = 'toast' + (kind ? ' ' + kind : ' success');
+  el.textContent = text;
+  // restart entry animation
+  el.style.animation = 'none';
+  void el.offsetWidth;
+  el.style.animation = '';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { if (el && el.parentNode) el.remove(); }, 1500);
+}
+
 // ---- load + render grid (infinite scroll) ----
 const cardEls = new Map();
+const postEls = new Map();
 let loading = false;
 let reachedEnd = false;
+
+function isPostMode() {
+  return state.source === 'theme';
+}
+
+function pagePerSize() {
+  return isPostMode() ? 40 : state.perPage;
+}
 
 async function load() {
   if (!$('artistView').classList.contains('hidden')) closeArtist();
   state.artists = [];
+  state.posts = [];
   reachedEnd = false;
   clearGrid();
+  updateGridVisibility();
   $('listView').scrollTop = 0;
   await fetchPage(false);
 }
 
 function clearGrid() {
   $('grid').innerHTML = '';
+  $('postsGrid').innerHTML = '';
   cardEls.clear();
+  postEls.clear();
+}
+
+function updateGridVisibility() {
+  $('grid').classList.toggle('hidden', isPostMode());
+  $('postsGrid').classList.toggle('hidden', !isPostMode());
+  updateSelectionBar();
 }
 
 async function fetchPage(append) {
   if (loading || (append && reachedEnd)) return;
   loading = true;
   const page = append ? state.page + 1 : 1;
+  const perPage = pagePerSize();
   setStatus(append ? '加载更多…' : '加载中…');
   try {
-    const artists = await window.api.getArtists({
+    const items = await window.api.getArtists({
       source: state.source,
       sort: state.sort,
       query: state.query,
       page,
-      perPage: state.perPage,
+      perPage,
       sampleCount: 4,
     });
     state.page = page;
-    const raw = artists ? artists.length : 0;
-    const fresh = (artists || []).filter((a) => !cardEls.has(a.name));
-    state.artists.push(...fresh);
-    appendCards(fresh);
+    const raw = items ? items.length : 0;
+    if (isPostMode()) {
+      const fresh = (items || []).filter((p) => p.postId && !postEls.has(p.postId));
+      state.posts.push(...fresh);
+      appendPosts(fresh);
+    } else {
+      const fresh = (items || []).filter((a) => !cardEls.has(a.name));
+      state.artists.push(...fresh);
+      appendCards(fresh);
+    }
     if (raw === 0) reachedEnd = true;
-    else if (state.source !== 'random' && state.source !== 'recent' && raw < state.perPage) reachedEnd = true;
-    setStatus(
-      state.artists.length
-        ? `已加载 ${state.artists.length} 位画师${reachedEnd ? '（已全部）' : ''}`
-        : '没有结果'
-    );
+    else if (state.source !== 'random' && state.source !== 'recent' && raw < perPage) reachedEnd = true;
+    const count = isPostMode() ? state.posts.length : state.artists.length;
+    const unit = isPostMode() ? '张作品' : '位画师';
+    setStatus(count ? `已加载 ${count} ${unit}${reachedEnd ? '（已全部）' : ''}` : '没有结果');
     setTimeout(checkFill, 60);
   } catch (e) {
     setStatus('加载失败：' + e.message);
@@ -88,6 +131,31 @@ function appendCards(artists) {
   const grid = $('grid');
   for (const a of artists) grid.appendChild(renderCard(a));
   updateSelectionBar();
+}
+
+function appendPosts(posts) {
+  const g = $('postsGrid');
+  for (const p of posts) {
+    if (!p.postId) continue;
+    const cell = renderPostCell(p);
+    g.appendChild(cell);
+    postEls.set(p.postId, cell);
+  }
+}
+
+function renderPostCell(p) {
+  const cell = document.createElement('div');
+  cell.className = 'pcell';
+  if (p.thumb) {
+    const img = document.createElement('img');
+    img.src = proxied(p.thumb);
+    img.loading = 'lazy';
+    img.addEventListener('click', () => openLightbox(p));
+    cell.appendChild(img);
+  } else {
+    cell.classList.add('empty');
+  }
+  return cell;
 }
 
 function refreshStars() {
@@ -193,7 +261,7 @@ function toggleSelect(name) {
 function updateSelectionBar() {
   const n = state.selected.size;
   $('selCount').textContent = n;
-  $('selectionBar').classList.toggle('hidden', n === 0);
+  $('selectionBar').classList.toggle('hidden', n === 0 || isPostMode());
 }
 
 // ---- copy ----
@@ -201,7 +269,7 @@ async function copyAnima(names) {
   if (!names.length) return;
   const text = names.map(toAnima).join(', ');
   await window.api.copy(text);
-  setStatus(`已复制 ${names.length} 位画师到剪贴板`);
+  showToast(`✓ 已复制 ${names.length} 位画师`);
 }
 
 // ---- favorites ----
@@ -428,6 +496,13 @@ async function openArtist(name) {
   $('selectionBar').classList.add('hidden');
   $('artistView').classList.remove('hidden');
   $('artistView').scrollTop = 0;
+  // reset download UI unless this artist is the one currently downloading
+  if (!activeDownload || activeDownload.name !== name) {
+    $('artistDownload').classList.remove('hidden');
+    $('artistDataset').classList.remove('hidden');
+    $('artistDownloadStatus').classList.add('hidden');
+    $('artistDownloadCancel').classList.add('hidden');
+  }
   await loadArtistPosts();
 }
 
@@ -476,6 +551,64 @@ function renderArtistPosts(posts) {
     }
     g.appendChild(cell);
   }
+}
+
+// ---- download all artist works ----
+let activeDownload = null;
+
+async function startArtistDownload(mode) {
+  if (!state.artist.name) return;
+  if (activeDownload) {
+    setStatus(`另一个下载进行中（${activeDownload.name}），请等待完成或取消`);
+    return;
+  }
+  const dir = await window.api.pickFolder();
+  if (!dir) return;
+  activeDownload = { name: state.artist.name, mode: mode || 'images' };
+  $('artistDownload').classList.add('hidden');
+  $('artistDataset').classList.add('hidden');
+  const s = $('artistDownloadStatus');
+  s.className = 'dl-status';
+  s.classList.remove('hidden');
+  s.textContent = mode === 'dataset' ? '准备数据集…' : '准备中…';
+  $('artistDownloadCancel').classList.remove('hidden');
+  window.api.downloadStart({ name: state.artist.name, parentDir: dir, mode: mode || 'images' });
+}
+
+function onDownloadProgress(p) {
+  if (!activeDownload || p.name !== activeDownload.name) return;
+  const s = $('artistDownloadStatus');
+  const ds = p.mode === 'dataset' ? '数据集' : '';
+  if (p.status === 'enumerating') {
+    s.textContent = `${ds ? '准备' + ds : '准备中'}… 已发现 ${p.total} 张`;
+  } else if (p.status === 'downloading') {
+    s.textContent = `${ds ? ds + '下载中' : '下载中'} ${p.current}/${p.total}`;
+  } else if (p.status === 'done') {
+    s.className = 'dl-status done';
+    const extra = [];
+    if (p.errors) extra.push(`失败 ${p.errors}`);
+    if (p.skipped) extra.push(`跳过 ${p.skipped}`);
+    s.textContent = `✓ ${ds || ''}完成 ${p.current}/${p.total}` + (extra.length ? ` (${extra.join('，')})` : '');
+    finishDownloadUI();
+  } else if (p.status === 'cancelled') {
+    s.className = 'dl-status err';
+    s.textContent = `已取消 ${p.current}/${p.total}`;
+    finishDownloadUI();
+  } else if (p.status === 'error') {
+    s.className = 'dl-status err';
+    s.textContent = '失败：' + (p.error || '未知错误');
+    finishDownloadUI();
+  }
+}
+
+function finishDownloadUI() {
+  activeDownload = null;
+  $('artistDownloadCancel').classList.add('hidden');
+  setTimeout(() => {
+    $('artistDownload').classList.remove('hidden');
+    $('artistDataset').classList.remove('hidden');
+    $('artistDownloadStatus').classList.add('hidden');
+  }, 4000);
 }
 
 function updateArtistStar() {
@@ -550,14 +683,92 @@ function renderLightboxTags(s) {
       chip.title = '点击复制';
       chip.addEventListener('click', (e) => {
         e.stopPropagation();
-        const text = g.isArtist ? toAnima(t) : displayName(t).toLowerCase();
-        window.api.copy(text);
-        setStatus('已复制：' + text);
+        copyTagText(t, g.isArtist);
+      });
+      // (the chip's click handler above already shows a toast via copyTagText)
+      chip.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const items = g.isArtist
+          ? [
+              { label: '复制为 @' + displayName(t), action: () => copyTagText(t, true) },
+              { label: '进入画师主页', action: () => { $('lightbox').classList.add('hidden'); openArtist(t); } },
+            ]
+          : [
+              { label: '复制 ' + displayName(t), action: () => copyTagText(t, false) },
+              { label: '搜索此 tag 的作品', action: () => searchTagAsTheme(t) },
+            ];
+        showContextMenu(e.clientX, e.clientY, items);
       });
       sec.appendChild(chip);
     }
     sections.appendChild(sec);
   }
+}
+
+// ---- context menu ----
+let activeCtxMenu = null;
+function showContextMenu(x, y, items) {
+  closeContextMenu();
+  const menu = document.createElement('div');
+  menu.className = 'ctx-menu';
+  for (const it of items) {
+    const row = document.createElement('div');
+    row.className = 'ctx-item';
+    row.textContent = it.label;
+    row.addEventListener('click', () => {
+      it.action();
+      closeContextMenu();
+    });
+    menu.appendChild(row);
+  }
+  menu.style.visibility = 'hidden';
+  document.body.appendChild(menu);
+  // adjust so menu stays in viewport
+  const rect = menu.getBoundingClientRect();
+  const left = Math.min(x, window.innerWidth - rect.width - 4);
+  const top = Math.min(y, window.innerHeight - rect.height - 4);
+  menu.style.left = Math.max(4, left) + 'px';
+  menu.style.top = Math.max(4, top) + 'px';
+  menu.style.visibility = '';
+  activeCtxMenu = menu;
+  setTimeout(() => {
+    document.addEventListener('mousedown', onCtxOutside, true);
+    document.addEventListener('keydown', onCtxKey, true);
+    window.addEventListener('blur', closeContextMenu, { once: true });
+  }, 0);
+}
+function onCtxOutside(e) {
+  if (activeCtxMenu && !activeCtxMenu.contains(e.target)) closeContextMenu();
+}
+function onCtxKey(e) {
+  if (e.key === 'Escape') closeContextMenu();
+}
+function closeContextMenu() {
+  if (!activeCtxMenu) return;
+  activeCtxMenu.remove();
+  activeCtxMenu = null;
+  document.removeEventListener('mousedown', onCtxOutside, true);
+  document.removeEventListener('keydown', onCtxKey, true);
+}
+
+function copyTagText(t, isArtist) {
+  const text = isArtist ? toAnima(t) : displayName(t).toLowerCase();
+  window.api.copy(text);
+  showToast('✓ 已复制：' + text);
+}
+
+function searchTagAsTheme(t) {
+  $('lightbox').classList.add('hidden');
+  state.source = 'theme';
+  $('source').value = 'theme';
+  $('sort').disabled = true;
+  $('query').placeholder = '题材/角色 tag，例：1girl';
+  hideSuggest();
+  state.query = displayName(t);
+  $('query').value = state.query;
+  updateGridVisibility();
+  load();
 }
 
 function buildAnima(s) {
@@ -578,7 +789,7 @@ function buildPlain(s) {
     ...(s.tagsArtist || []),
     ...(s.tagsGeneral || []),
     ...(s.tagsMeta || []),
-  ].join(' ');
+  ].join(', ');
 }
 
 // ---- settings ----
@@ -600,6 +811,7 @@ function bind() {
     else if (state.source === 'random') q.placeholder = '（随机模式无需输入）';
     else q.placeholder = '（最近更新，无需输入）';
     hideSuggest();
+    updateGridVisibility();
   });
   $('sort').addEventListener('change', (e) => { state.sort = e.target.value; });
   $('query').addEventListener('input', (e) => { state.query = e.target.value; scheduleSuggest(); });
@@ -677,7 +889,7 @@ function bind() {
   $('saveSettingsBtn').addEventListener('click', async () => {
     await window.api.storeSet('settings', { login: $('loginInput').value.trim(), apiKey: $('apiKeyInput').value.trim() });
     $('settingsModal').classList.add('hidden');
-    setStatus('已保存 API 设置');
+    showToast('✓ 已保存 API 设置');
   });
 
   $('confirmGroupBtn').addEventListener('click', () => {
@@ -696,19 +908,34 @@ function bind() {
     e.stopPropagation();
     if (!state.lightboxSample) return;
     window.api.copy(buildAnima(state.lightboxSample));
-    setStatus('已复制 Anima 提示词');
+    showToast('✓ 已复制 Anima 提示词');
   });
   $('ltCopyAllPlain').addEventListener('click', (e) => {
     e.stopPropagation();
     if (!state.lightboxSample) return;
     window.api.copy(buildPlain(state.lightboxSample));
-    setStatus('已复制全部标签（原样）');
+    showToast('✓ 已复制全部提示词');
   });
   $('ltPost').addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
     const u = e.currentTarget.dataset.url;
     if (u) window.api.openExternal(u);
+  });
+  $('ltDownload').addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const s = state.lightboxSample;
+    if (!s) return;
+    const url = s.fileUrl || s.large || s.thumb;
+    if (!url) { setStatus('该作品没有可下载的图片地址'); return; }
+    const ext = s.fileExt || ((url.match(/\.([a-z0-9]{2,4})(?:\?|$)/i) || [])[1]) || 'jpg';
+    const artistPart = (s.tagsArtist && s.tagsArtist[0]) ? s.tagsArtist[0] + '_' : '';
+    const suggested = `${artistPart}${s.postId || 'image'}.${ext}`;
+    setStatus('下载中…');
+    const r = await window.api.downloadSingle({ url, suggestedName: suggested });
+    if (r.ok) showToast('✓ 已保存：' + r.filePath);
+    else if (r.cancelled) setStatus('');
+    else showToast('✗ 下载失败：' + r.error, 'err');
   });
 
   $('artistBack').addEventListener('click', closeArtist);
@@ -717,6 +944,13 @@ function bind() {
   $('artistStar').addEventListener('click', () => { toggleFav(state.artist.name); updateArtistStar(); });
   $('artistOpen').addEventListener('click', () =>
     window.api.openExternal(`https://danbooru.donmai.us/posts?tags=${encodeURIComponent(state.artist.name)}`));
+
+  $('artistDownload').addEventListener('click', () => startArtistDownload('images'));
+  $('artistDataset').addEventListener('click', () => startArtistDownload('dataset'));
+  $('artistDownloadCancel').addEventListener('click', () => {
+    if (activeDownload) window.api.downloadCancel(activeDownload.name);
+  });
+  window.api.onDownloadProgress(onDownloadProgress);
 }
 
 async function init() {
